@@ -1,0 +1,75 @@
+{
+  "entities": {
+    "users": {
+      "title": "User",
+      "description": "User profile with 1-month premium pass subscription tracking",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "subscriptionPlan": {
+          "type": "string",
+          "description": "Active plan ('free', 'premium', or 'expired')",
+          "enum": ["free", "premium", "expired"]
+        },
+        "subscriptionDuration": {
+          "type": "string",
+          "description": "Subscription duration, e.g. '1_month'"
+        },
+        "premiumPurchasedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when 1-month premium was activated"
+        },
+        "premiumExpiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when 1-month premium pass expires (30 days from purchase)"
+        },
+        "lastPaymentId": {
+          "type": "string",
+          "description": "Razorpay payment ID for verification audit"
+        },
+        "lastOrderId": {
+          "type": "string",
+          "description": "Razorpay order ID for verification audit"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when user was created"
+        }
+      },
+      "required": ["email", "subscriptionPlan", "createdAt"]
+    },
+    "dailyUsage": {
+      "title": "DailyUsage",
+      "description": "Tracks daily practice consumption for non-premium accounts",
+      "type": "object",
+      "properties": {
+        "used_seconds": {
+          "type": "number",
+          "description": "Seconds used in practice today"
+        },
+        "allowed_seconds": {
+          "type": "number",
+          "description": "Total allowed seconds per day"
+        }
+      },
+      "required": ["used_seconds", "allowed_seconds"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "Individual user document containing 1-month subscription details"
+    },
+    "/daily_usage/{usageId}": {
+      "schema": "dailyUsage",
+      "description": "Daily usage limit document keyed by {userId}_{YYYY-MM-DD}"
+    }
+  }
+}
+

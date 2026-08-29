@@ -1,0 +1,6 @@
+{
+  "name": "Veronica AI",
+  "description": "An AI conversation partner and coach to help you build confidence, emotional intelligence, and authentic communication skills.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
