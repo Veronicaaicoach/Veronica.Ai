@@ -46,6 +46,10 @@ async function startServer() {
   app.post("/api/create-order", async (req, res) => {
     try {
       const rawAmount = req.body?.amount !== undefined ? Number(req.body.amount) : 50000;
+      const plan = req.body?.plan || (rawAmount === 10000 ? "1_week_premium" : "1_month_premium");
+      const isWeekPlan = plan === "1_week_premium" || rawAmount === 10000;
+      const durationDays = isWeekPlan ? 7 : 30;
+      const planLabel = isWeekPlan ? "1-Week" : "1-Month";
       
       // Validate amount >= 100 paise
       if (isNaN(rawAmount) || rawAmount < 100) {
@@ -68,9 +72,9 @@ async function startServer() {
         currency,
         receipt,
         notes: {
-          plan: "1_month_premium",
-          duration: "30_days",
-          description: "Veronica AI 1-Month Premium Access"
+          plan,
+          duration: `${durationDays}_days`,
+          description: `Veronica AI ${planLabel} Premium Access`
         }
       });
 
@@ -79,8 +83,8 @@ async function startServer() {
         amount: order.amount,
         currency: order.currency,
         key_id: keyId,
-        plan: "1_month_premium",
-        duration_days: 30
+        plan,
+        duration_days: durationDays
       });
     } catch (error: any) {
       console.error("Razorpay order creation error:", error);
@@ -184,21 +188,46 @@ async function startServer() {
       }
 
       // Return success only if signatures match
-      const oneMonthFromNow = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const plan = req.body?.plan || "1_month_premium";
+      const isWeekPlan = plan === "1_week_premium";
+      const durationDays = isWeekPlan ? 7 : 30;
+      const planLabel = isWeekPlan ? "1-Week" : "1-Month";
+      const expiresAt = new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000).toISOString();
+
       return res.json({
         success: true,
-        message: "Payment verified successfully. 1-Month Premium activated.",
+        message: `Payment verified successfully. ${planLabel} Premium activated.`,
         order_id,
         payment_id,
-        plan: "1_month_premium",
-        duration_days: 30,
-        expires_at: oneMonthFromNow
+        plan,
+        duration_days: durationDays,
+        expires_at: expiresAt
       });
     } catch (error: any) {
       console.error("Payment verification exception:", error);
       return res.status(500).json({
         success: false,
         error: error.message || "Server error during payment verification"
+      });
+    }
+  });
+
+  // Cancel Subscription Endpoint
+  app.post("/api/cancel-subscription", async (req, res) => {
+    try {
+      const { user_id, reason } = req.body || {};
+      return res.json({
+        success: true,
+        message: "Subscription cancelled successfully. The account is now reverted to the Free tier.",
+        user_id: user_id || null,
+        status: "cancelled",
+        cancelled_at: new Date().toISOString()
+      });
+    } catch (error: any) {
+      console.error("Cancel subscription error:", error);
+      return res.status(500).json({
+        success: false,
+        error: error.message || "Failed to cancel subscription"
       });
     }
   });
@@ -779,6 +808,9 @@ Voice & Delivery Guidelines:
 Keep your responses concise, natural, and highly conversational, imitating a real voice interaction.`;
       }
 
+      let feedbackSent = false;
+      const userAudioChunks: string[] = [];
+
       const session = await ai.live.connect({
         model: "gemini-3.1-flash-live-preview",
         callbacks: {
@@ -791,8 +823,9 @@ Keep your responses concise, natural, and highly conversational, imitating a rea
             if (message.toolCall) {
               const call = message.toolCall.functionCalls[0];
               if (call.name === "save_feedback") {
+                feedbackSent = true;
                 const args = call.args;
-                clientWs.send(JSON.stringify({ feedback: JSON.stringify(args) }));
+                clientWs.send(JSON.stringify({ type: "feedback", feedback: JSON.stringify(args) }));
                 try {
                   if (typeof session.sendToolResponse === 'function') {
                     session.sendToolResponse({ functionResponses: [{ name: "save_feedback", id: call.id, response: { status: "ok" } }] });
@@ -826,13 +859,30 @@ Keep your responses concise, natural, and highly conversational, imitating a rea
           tools: [{
             functionDeclarations: [{
               name: "save_feedback",
-              description: "Saves the generated feedback in a structured format based on the conversation blueprint.",
+              description: "Saves structured feedback analyzing the conversation, extracting the 5 main parameters with individual scores and observations, determining the overall score on that basis, and detailing the strengths and weaknesses.",
               parameters: {
                 type: Type.OBJECT,
                 properties: {
-                  summary: { type: Type.STRING, description: "Short interpretation like 'Good Conversation' or 'Needs Improvement'." },
-                  strengths: { type: Type.ARRAY, items: { type: Type.STRING }, description: "What the user did well. Be specific." },
-                  improvements: { type: Type.ARRAY, items: { type: Type.STRING }, description: "What the user can improve." },
+                  summary: { type: Type.STRING, description: "Executive summary interpretation of the conversation." },
+                  score: { type: Type.INTEGER, description: "Overall score from 0 to 100 calculated directly on the basis of the extracted parameters." },
+                  score_basis_explanation: { type: Type.STRING, description: "Clear explanation of how the overall score was derived from the parameter ratings." },
+                  parameters: {
+                    type: Type.ARRAY,
+                    description: "The main parameters extracted from the conversation (Conversation Flow, Active Listening & Reciprocity, Confidence & Composure, Engagement & Question Quality, Emotional Calibration).",
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        name: { type: Type.STRING, description: "Parameter name (e.g. Conversation Flow, Active Listening, Confidence & Composure, Engagement, Emotional Calibration)" },
+                        score: { type: Type.INTEGER, description: "Score for this parameter from 0 to 100" },
+                        status: { type: Type.STRING, description: "Rating: 'Excellent', 'Strong', 'Moderate', or 'Needs Work'" },
+                        observation: { type: Type.STRING, description: "Concrete observation of user's performance on this parameter in this session" }
+                      },
+                      required: ["name", "score", "observation"]
+                    }
+                  },
+                  strengths: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Specific strengths and effective conversational moments demonstrated by the user." },
+                  weaknesses: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Specific weaknesses, missteps, awkward habits, or friction points identified in the conversation." },
+                  improvements: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Actionable improvement tips." },
                   categories: { 
                     type: Type.OBJECT,
                     properties: {
@@ -854,15 +904,14 @@ Keep your responses concise, natural, and highly conversational, imitating a rea
                       type: Type.OBJECT,
                       properties: {
                         original: { type: Type.STRING, description: "What the user originally said" },
-                        better: { type: Type.STRING, description: "A better way to respond" },
-                        why: { type: Type.STRING, description: "Why this response is better" }
+                        better: { type: Type.STRING, description: "A better, more charismatic way to respond" },
+                        why: { type: Type.STRING, description: "Why this response works better" }
                       }
                     }
                   },
-                  practice_focus: { type: Type.STRING, description: "A short, actionable recommendation for their next conversation." },
-                  score: { type: Type.INTEGER, description: "Overall score from 0 to 100" }
+                  practice_focus: { type: Type.STRING, description: "A short, actionable recommendation for their next practice session." }
                 },
-                required: ["score", "summary"]
+                required: ["score", "summary", "strengths", "weaknesses"]
               }
             }]
           }],
@@ -881,26 +930,13 @@ Keep your responses concise, natural, and highly conversational, imitating a rea
           if (currentSessionElapsed >= remaining) {
             isExpired = true;
             clearInterval(sessionTimer);
-            clientWs.send(JSON.stringify({ type: "time_expired" }));
-            
-            try {
-               let feedbackDirective = "";
-               if (isPracticeModule) {
-                 feedbackDirective = "Evaluate specifically against Module 1 (Practice Conversations) skills: natural opening, active listening, asking open-ended questions, conversation balance (avoided interview mode, avoided one-word answers, shared personal details), and conversation rhythm (Ask -> Listen -> Respond -> Share -> Follow up).";
-               } else if (isFlirtingModule) {
-                 feedbackDirective = "Evaluate specifically against Module 2 (Flirting Practice) skills: playful banter & teasing, quality of compliments (specific and genuine vs generic), calibration & pacing (escalation ladder: Friendly -> Playful -> Lightly Flirty -> More Personal -> Romantic Interest), confidence, handling playful challenges, and reading flirting cues.";
-               } else if (isDatingAdviceModule) {
-                 feedbackDirective = "Evaluate specifically against Module 3 (Dating Advice) metrics: emotional maturity, understanding reciprocal interest and boundaries, healthy communication and texting habits, handling rejection or uncertainty with dignity, and avoiding needy, pushy, or manipulative behaviors.";
-               } else if (isConfidenceModule) {
-                 feedbackDirective = "Evaluate specifically against Module 4 (Confidence Building) skills: overcoming hesitation, willingness to take social risks/start speaking, speaking clarity and asserting opinions, handling silence or awkward moments calmly without over-correcting, progress on confidence exercises/challenges, and maintaining composure.";
-               }
-               const reqText = `The conversation is now over. Please call the 'save_feedback' tool to save a detailed, objective, evidence-based feedback report based strictly on the conversation we just had. CRITICAL RULE: If the user did not speak any clear, coherent words to you during this session (e.g. you only heard silence, background noise, or nothing at all), you MUST set the score to 0 and the summary to 'You didn\\'t actively participate in this conversation. Because there was no meaningful communication from you, your score is 0.', and leave strengths/improvements/better_responses empty. DO NOT hallucinate or invent a conversation that did not happen. If they DID speak, generate a realistic score out of 100, category scores, strengths, improvements, specific 'better_responses' examples quoting what they said vs what they could have said, and a 'practice_focus'. ${feedbackDirective} Speak a 60-70 word summary directly to them out loud. Do not say anything else before or after the feedback.`;
-               if (typeof session.sendClientContent === 'function') {
-                 session.sendClientContent({ turns: [{ role: "user", parts: [{ text: reqText }] }], turnComplete: true });
-               } else {
-                 (session as any).send({ clientContent: { turns: [{ role: "user", parts: [{ text: reqText }] }], turnComplete: true } });
-               }
-            } catch (e) {}
+            clientWs.send(JSON.stringify({ 
+              type: "time_expired",
+              feedbackLocked: true,
+              message: "Free session time reached. Detailed conversation analysis and score generation are reserved for Premium members." 
+            }));
+            session.close();
+            clientWs.close();
           }
         }, 1000);
       }
@@ -910,6 +946,7 @@ Keep your responses concise, natural, and highly conversational, imitating a rea
         try {
           const parsed = JSON.parse(data.toString());
           if (parsed.audio) {
+            userAudioChunks.push(parsed.audio);
             try {
               session.sendRealtimeInput({
                 audio: {
@@ -923,23 +960,57 @@ Keep your responses concise, natural, and highly conversational, imitating a rea
           }
           if (parsed.close) {
              try {
+               if (parsed.isPremium !== undefined) {
+                 isPremium = parsed.isPremium;
+               }
+               // STRICT CHECK: Feedback is only generated if premium version is unlocked!
+               if (!isPremium) {
+                 clientWs.send(JSON.stringify({ 
+                   type: "feedback_locked", 
+                   message: "Conversation feedback analysis is locked. Upgrade to Premium to analyze your conversation, extract key parameters, get an objective score, and view strengths and weaknesses." 
+                 }));
+                 session.close();
+                 clientWs.close();
+                 return;
+               }
+
                const userSpoke = parsed.userSpoke;
                let reqText = "The conversation is now over.";
                
                if (userSpoke === false) {
-                 reqText += " IMPORTANT: The user DID NOT SPEAK during this entire session (no microphone volume detected). You MUST call 'save_feedback' with summary 'You didn\\'t actively participate in this conversation. Because there was no meaningful communication from you, your score is 0.', score 0, and empty arrays for strengths/improvements/better_responses. Set practice_focus to 'Start with a simple question or introduction. You don\\'t need a perfect opening—just start the conversation.'. You MUST NOT invent or hallucinate a conversation. Do not say anything out loud, just save the feedback.";
+                 reqText += " IMPORTANT: The user DID NOT SPEAK during this entire session (no microphone volume detected). You MUST call 'save_feedback' tool now with score 0, summary 'You didn\\'t actively participate in this conversation. Because there was no meaningful communication detected from you, your score is 0.', score_basis_explanation 'Score is 0 because no verbal interaction was detected.', empty strengths array, weaknesses ['No voice communication or verbal engagement detected during the session.'], parameters [ { name: 'Conversation Flow & Rhythm', score: 0, status: 'Needs Work', observation: 'No spoken input detected' }, { name: 'Active Listening & Reciprocity', score: 0, status: 'Needs Work', observation: 'No spoken input detected' }, { name: 'Confidence & Composure', score: 0, status: 'Needs Work', observation: 'No spoken input detected' }, { name: 'Engagement & Question Quality', score: 0, status: 'Needs Work', observation: 'No spoken input detected' }, { name: 'Emotional Calibration', score: 0, status: 'Needs Work', observation: 'No spoken input detected' } ], and practice_focus 'Start with a simple greeting or question. Just speak naturally—you don\\'t need a perfect opening.'. Do not speak out loud, just execute the 'save_feedback' tool.";
                } else {
                  let feedbackDirective = "";
                  if (isPracticeModule) {
-                   feedbackDirective = "Evaluate specifically against Module 1 (Practice Conversations) skills: natural opening, active listening, asking open-ended questions, conversation balance (avoided interview mode, avoided one-word answers, shared personal details), and conversation rhythm (Ask -> Listen -> Respond -> Share -> Follow up).";
+                   feedbackDirective = "Evaluate specifically against Module 1 (Practice Conversations): natural opening, active listening, asking open-ended questions, conversation balance (avoided interview mode, avoided one-word answers, shared personal details), and conversation rhythm.";
                  } else if (isFlirtingModule) {
-                   feedbackDirective = "Evaluate specifically against Module 2 (Flirting Practice) skills: playful banter & teasing, quality of compliments (specific and genuine vs generic), calibration & pacing (escalation ladder: Friendly -> Playful -> Lightly Flirty -> More Personal -> Romantic Interest), confidence, handling playful challenges, and reading flirting cues.";
+                   feedbackDirective = "Evaluate specifically against Module 2 (Flirting Practice): playful banter & teasing, quality of compliments (specific and genuine vs generic), calibration & pacing (escalation ladder: Friendly -> Playful -> Lightly Flirty -> Romantic Interest), confidence, and reading flirting cues.";
                  } else if (isDatingAdviceModule) {
-                   feedbackDirective = "Evaluate specifically against Module 3 (Dating Advice) metrics: emotional maturity, understanding reciprocal interest and boundaries, healthy communication and texting habits, handling rejection or uncertainty with dignity, and avoiding needy, pushy, or manipulative behaviors.";
+                   feedbackDirective = "Evaluate specifically against Module 3 (Dating Advice): emotional maturity, mutual reciprocity, healthy communication and texting habits, handling rejection or uncertainty with dignity, and respecting personal boundaries.";
                  } else if (isConfidenceModule) {
-                   feedbackDirective = "Evaluate specifically against Module 4 (Confidence Building) skills: overcoming hesitation, willingness to take social risks/start speaking, speaking clarity and asserting opinions, handling silence or awkward moments calmly without over-correcting, progress on confidence exercises/challenges, and maintaining composure.";
+                   feedbackDirective = "Evaluate specifically against Module 4 (Confidence Building): overcoming hesitation, willingness to start speaking, speaking clarity and asserting opinions, handling silence or awkward moments calmly without over-correcting, and maintaining composure.";
                  }
-                 reqText += ` Please call the 'save_feedback' tool to save a detailed, objective, evidence-based feedback report based strictly on the conversation we just had. CRITICAL RULE: If the user did not speak any clear, coherent words to you during this session (e.g. you only heard silence, background noise, or nothing at all), you MUST set the score to 0 and the summary to 'You didn\\'t actively participate in this conversation. Because there was no meaningful communication from you, your score is 0.', and leave strengths/improvements/better_responses empty. DO NOT hallucinate or invent a conversation that did not happen. If they DID speak, generate a realistic score out of 100, category scores, strengths, improvements, specific 'better_responses' examples quoting what they said vs what they could have said, and a 'practice_focus'. ${feedbackDirective} Speak a 60-70 word summary directly to them out loud. Do not say anything else before or after the feedback.`;
+                 
+                 reqText += ` Conduct an in-depth, honest, objective analysis of the conversation that just concluded. You MUST call the 'save_feedback' tool now.
+1. EXTRACT THE 5 MAIN PARAMETERS:
+   - Conversation Flow & Rhythm (pacing, natural transitions, seamless back-and-forth, avoiding dead ends)
+   - Active Listening & Reciprocity (acknowledging what was said, sharing relevant personal thoughts, equal dialogue)
+   - Confidence & Composure (steady voice, conviction, comfort in speaking, avoiding apologetic timidness)
+   - Engagement & Question Quality (asking open-ended, interesting questions rather than boring generic interview questions)
+   - Emotional Awareness & Calibration (reading tone, respectful boundaries, situational charm/humor)
+   Score each parameter from 0 to 100 with a detailed, evidence-based observation.
+2. CALCULATE OVERALL SCORE ON THIS BASIS:
+   - Give an overall score from 0 to 100 derived directly on the basis of these extracted parameters (a balanced weighted average).
+   - In 'score_basis_explanation', explain clearly how the score was calculated from these parameters.
+3. STRENGTHS & WEAKNESSES:
+   - Specific STRENGTHS: concrete moments of effective communication, charm, good questions, or genuine active listening.
+   - Specific WEAKNESSES: concrete weaknesses, awkward habits, missed cues, or friction points in the conversation.
+4. BETTER RESPONSES:
+   - 2-3 specific examples of what the user said (original) vs a much more effective, charismatic way to say it (better), with the reasoning (why).
+5. ACTIONABLE PRACTICE FOCUS:
+   - 1 high-impact takeaway drill for the next practice session.
+${feedbackDirective}
+Call 'save_feedback' now.`;
                }
                
                if (typeof session.sendClientContent === 'function') {
@@ -947,6 +1018,75 @@ Keep your responses concise, natural, and highly conversational, imitating a rea
                } else {
                  (session as any).send({ clientContent: { turns: [{ role: "user", parts: [{ text: reqText }] }], turnComplete: true } });
                }
+
+               // Fallback safety: if tool call is not received within 8 seconds, generate with gemini-3.1-flash-preview
+               setTimeout(async () => {
+                 if (!feedbackSent && clientWs.readyState === WebSocket.OPEN) {
+                   try {
+                     const combinedAudioBuffer = Buffer.concat(userAudioChunks.map(chunk => Buffer.from(chunk, 'base64')));
+                      const combinedAudioBase64 = combinedAudioBuffer.toString('base64');
+                      const fallbackPrompt = `You are Veronica AI, Dating & Social Confidence Coach. The user just completed a voice practice session for module "${moduleName}". I have attached the audio of the user's side of the conversation. Listen to the conversation, analyze their performance, extract the 5 main parameters (Conversation Flow & Rhythm, Active Listening & Reciprocity, Confidence & Composure, Engagement & Question Quality, Emotional Awareness & Calibration) with individual 0-100 scores and observations, calculate an overall score from 0 to 100 based on these parameters, detail concrete Strengths and Weaknesses of the conversation, give 2-3 better response examples with reasons, and specify an actionable practice focus.`;
+                      
+                      const reqContents = userAudioChunks.length > 0 ? [
+                        { role: 'user', parts: [
+                          { inlineData: { mimeType: "audio/pcm;rate=16000", data: combinedAudioBase64 } },
+                          { text: fallbackPrompt }
+                        ]}
+                      ] : fallbackPrompt;
+
+                      const fallbackResponse = await ai.models.generateContent({
+                        model: 'gemini-3.1-flash-preview',
+                        contents: reqContents as any,
+                       config: {
+                         responseMimeType: "application/json",
+                         responseSchema: {
+                           type: Type.OBJECT,
+                           properties: {
+                             summary: { type: Type.STRING },
+                             score: { type: Type.INTEGER },
+                             score_basis_explanation: { type: Type.STRING },
+                             parameters: {
+                               type: Type.ARRAY,
+                               items: {
+                                 type: Type.OBJECT,
+                                 properties: {
+                                   name: { type: Type.STRING },
+                                   score: { type: Type.INTEGER },
+                                   status: { type: Type.STRING },
+                                   observation: { type: Type.STRING }
+                                 },
+                                 required: ["name", "score", "observation"]
+                               }
+                             },
+                             strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+                             weaknesses: { type: Type.ARRAY, items: { type: Type.STRING } },
+                             improvements: { type: Type.ARRAY, items: { type: Type.STRING } },
+                             better_responses: {
+                               type: Type.ARRAY,
+                               items: {
+                                 type: Type.OBJECT,
+                                 properties: {
+                                   original: { type: Type.STRING },
+                                   better: { type: Type.STRING },
+                                   why: { type: Type.STRING }
+                                 }
+                               }
+                             },
+                             practice_focus: { type: Type.STRING }
+                           },
+                           required: ["score", "summary", "strengths", "weaknesses", "parameters"]
+                         }
+                       }
+                     });
+                     if (!feedbackSent && fallbackResponse.text) {
+                       feedbackSent = true;
+                       clientWs.send(JSON.stringify({ type: "feedback", feedback: fallbackResponse.text }));
+                     }
+                   } catch (fallbackErr) {
+                     console.error("Fallback feedback error:", fallbackErr);
+                   }
+                 }
+               }, 15000);
              } catch (err) {
                console.error("Error asking for feedback", err);
                session.close();

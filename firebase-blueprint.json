@@ -2,7 +2,7 @@
   "entities": {
     "users": {
       "title": "User",
-      "description": "User profile with 1-month premium pass subscription tracking",
+      "description": "User profile with 1-week or 1-month premium pass subscription tracking",
       "type": "object",
       "properties": {
         "email": {
@@ -11,22 +11,27 @@
         },
         "subscriptionPlan": {
           "type": "string",
-          "description": "Active plan ('free', 'premium', or 'expired')",
-          "enum": ["free", "premium", "expired"]
+          "description": "Active plan ('free', 'premium', 'expired', or 'cancelled')",
+          "enum": ["free", "premium", "expired", "cancelled"]
         },
         "subscriptionDuration": {
           "type": "string",
-          "description": "Subscription duration, e.g. '1_month'"
+          "description": "Subscription duration, e.g. '1_week' or '1_month'"
+        },
+        "cancelledAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when ongoing subscription was cancelled"
         },
         "premiumPurchasedAt": {
           "type": "string",
           "format": "date-time",
-          "description": "Timestamp when 1-month premium was activated"
+          "description": "Timestamp when premium was activated"
         },
         "premiumExpiresAt": {
           "type": "string",
           "format": "date-time",
-          "description": "Timestamp when 1-month premium pass expires (30 days from purchase)"
+          "description": "Timestamp when premium pass expires (7 days for week, 30 days for month)"
         },
         "lastPaymentId": {
           "type": "string",
