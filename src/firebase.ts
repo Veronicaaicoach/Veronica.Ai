@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { getFirestore, initializeFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   projectId: "gen-lang-client-0646086635",
@@ -13,7 +13,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, "ai-studio-veronicaai-45824abd-60e2-453d-94f0-f3af993ba70f");
+export const db = initializeFirestore(app, { experimentalForceLongPolling: true }, "ai-studio-veronicaai-45824abd-60e2-453d-94f0-f3af993ba70f");
 
 export enum OperationType {
   CREATE = 'create',

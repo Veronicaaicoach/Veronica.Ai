@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Activity, User, LogOut, CreditCard, CircleCheck, Lock, Trash2, AlertCircle, Calendar, Sparkles, Clock, XCircle } from 'lucide-react';
+import { Mic, MicOff, Activity, User, LogOut, CreditCard, CircleCheck, Lock, Trash2, AlertCircle, Calendar, Sparkles, Clock, XCircle , Copy, Check, Mail, ChevronDown} from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { pcmToBase64, playAudioChunk } from './audio';
 import { AuthScreen } from './components/AuthScreen';
 import { Sidebar } from './components/Sidebar';
+import { RoleplayScenario, ActiveScenario, PRESET_SCENARIOS } from './components/RoleplayScenario';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import { onAuthStateChanged, signOut, User as FirebaseUser, deleteUser } from 'firebase/auth';
 import { doc, getDoc, updateDoc, setDoc, deleteDoc } from 'firebase/firestore';
@@ -17,6 +18,16 @@ function App() {
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [personality, setPersonality] = useState<string>('Practice conversations');
+  const [activeScenario, setActiveScenario] = useState<ActiveScenario>({
+    id: PRESET_SCENARIOS[0].id,
+    name: PRESET_SCENARIOS[0].name,
+    location: PRESET_SCENARIOS[0].location,
+    description: PRESET_SCENARIOS[0].description,
+    openerSuggestion: PRESET_SCENARIOS[0].openerSuggestion,
+    coachingTips: PRESET_SCENARIOS[0].coachingTips,
+    vibe: 'realistic',
+    isCustom: false,
+  });
   const [feedback, setFeedback] = useState<any>(null);
   const [isPaymentLoading, setIsPaymentLoading] = useState(false);
   const [loadingPlan, setLoadingPlan] = useState<'1_week' | '1_month' | null>(null);
@@ -38,6 +49,12 @@ function App() {
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [showFeedbackLockedModal, setShowFeedbackLockedModal] = useState(false);
   const [showHowItWorksModal, setShowHowItWorksModal] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [contactCopied, setContactCopied] = useState(false);
+  const [showHelpModal, setShowHelpModal] = useState(false);
+  const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const inputAudioCtxRef = useRef<AudioContext | null>(null);
@@ -351,7 +368,7 @@ function App() {
     setCallState('connecting');
 
     if (!isPremium && personality !== 'Practice conversations' && personality !== 'Dating advice') {
-      setErrorMsg('This coaching module is locked on the Free Tier. Unlock Premium to access Flirting Practice and Confidence Building.');
+      setErrorMsg('This coaching module is locked on the Free Tier. Unlock Premium to access Flirting Practice and Approach Skills.');
       setActiveTab('pricing');
       setCallState('idle');
       return;
@@ -414,7 +431,10 @@ function App() {
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const token = user ? await user.getIdToken() : '';
-      const wsUrl = `${protocol}//${window.location.host}/live?personality=${encodeURIComponent(personality)}&token=${encodeURIComponent(token)}&timeLeft=${timeLeft}&isPremium=${isPremium}`;
+      const scenarioParams = personality === 'Approach skills'
+        ? `&scenarioLocation=${encodeURIComponent(activeScenario.location)}&scenarioContext=${encodeURIComponent(activeScenario.description)}&scenarioVibe=${encodeURIComponent(activeScenario.vibe)}`
+        : '';
+      const wsUrl = `${protocol}//${window.location.host}/live?personality=${encodeURIComponent(personality)}&token=${encodeURIComponent(token)}&timeLeft=${timeLeft}&isPremium=${isPremium}${scenarioParams}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -449,6 +469,11 @@ function App() {
         if (msg.type === "time_expired") {
           stopCall(true);
           setActiveTab('pricing');
+          return;
+        }
+        if (msg.type === "error") {
+          setErrorMsg(msg.error || "Connection error.");
+          setCallState('error');
           return;
         }
         if (msg.type === "feedback_locked") {
@@ -511,8 +536,8 @@ function App() {
       return;
     }
 
-    // Free users: feedback is locked, never analyze
-    if (!isPremium) {
+    // Free users OR Dating Advice module: skip feedback analysis
+    if (!isPremium || personality === 'Dating advice') {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ close: true, skipFeedback: true, isPremium: false }));
         wsRef.current.close();
@@ -528,13 +553,13 @@ function App() {
       if (processorRef.current) {
         processorRef.current.disconnect();
       }
-      if (!skipFeedback) {
+      if (!skipFeedback && personality !== 'Dating advice') {
         setShowFeedbackLockedModal(true);
       }
       return;
     }
 
-    // Premium users: trigger comprehensive analysis and feedback generation
+    // Premium users (excluding Dating Advice): trigger comprehensive analysis and feedback generation
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       if (skipFeedback) {
         wsRef.current.close();
@@ -641,7 +666,7 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#050505] text-white font-sans selection:bg-pink-500/20 overflow-hidden flex flex-col">
+    <div className="h-[100dvh] min-h-[100dvh] bg-[#050505] text-white font-sans selection:bg-pink-500/20 overflow-hidden flex flex-col">
       {/* Header */}
       <header className="p-6 flex justify-between items-center relative z-10">
         <div className="flex items-center gap-2">
@@ -650,29 +675,7 @@ function App() {
             System Status: <span className={callState !== 'idle' && callState !== 'error' ? 'text-pink-500' : ''}>{callState !== 'idle' && callState !== 'error' ? 'Active' : 'Inactive'}</span>
           </span>
         </div>
-        <div className="absolute left-1/2 -translate-x-1/2 font-medium tracking-[0.3em] uppercase text-sm hidden md:block">Veronica <span className="text-pink-500">AI</span></div>
           <div className="flex flex-col items-end gap-2 relative">
-            <div className="flex items-center gap-4">
-              <span className="text-xs font-mono opacity-40">{user.email}</span>
-              <button 
-                onClick={() => setShowDeleteConfirm(true)}
-                className="text-xs text-pink-500/80 hover:text-pink-500 transition-colors flex items-center gap-1"
-              >
-                <Trash2 className="w-3 h-3" />
-                Delete Account
-              </button>
-              <button 
-                onClick={() => {
-                  sessionStorage.removeItem('tempPremium');
-                  signOut(auth);
-                }}
-                className="text-xs text-white/60 hover:text-white transition-colors flex items-center gap-1"
-              >
-                <LogOut className="w-3 h-3" />
-                Sign Out
-              </button>
-            </div>
-            
             <AnimatePresence>
               {showDeleteConfirm && (
                 <motion.div
@@ -725,7 +728,7 @@ function App() {
       </header>
 
       <div className="flex flex-1 overflow-hidden relative">
-        <Sidebar onHowItWorksClick={() => setShowHowItWorksModal(true)} />
+        <Sidebar onHowItWorksClick={() => setShowHowItWorksModal(true)} onAboutClick={() => setShowAboutModal(true)} onContactClick={() => setShowContactModal(true)} onHelpClick={() => setShowHelpModal(true)} onSettingsClick={() => setShowSettingsModal(true)} />
         <div className="flex-1 flex flex-col relative overflow-hidden w-full">
 
       {/* Main Content Area */}
@@ -767,8 +770,8 @@ function App() {
                         <option className="bg-[#1A1A1A] text-white" value="Flirting practice">
                           {!isPremium ? '🔒 ' : ''}Flirting Practice {!isPremium ? '(Premium)' : ''}
                         </option>
-                        <option className="bg-[#1A1A1A] text-white" value="Confidence building">
-                          {!isPremium ? '🔒 ' : ''}Confidence Building {!isPremium ? '(Premium)' : ''}
+                        <option className="bg-[#1A1A1A] text-white" value="Approach skills">
+                          {!isPremium ? '🔒 ' : ''}Approach Skills {!isPremium ? '(Premium)' : ''}
                         </option>
                       </select>
                       {!isPremium && personality !== 'Practice conversations' && personality !== 'Dating advice' && (
@@ -792,10 +795,17 @@ function App() {
                         Honest guidance on texting, first dates, reading interest & boundaries
                       </p>
                     )}
-                    {personality === 'Confidence building' && (
-                      <p className="text-[11px] text-emerald-300/80 mt-3 max-w-xs mx-auto font-light leading-relaxed">
-                        Overcoming hesitation, handling awkward moments & progressive social challenges
-                      </p>
+                    {personality === 'Approach skills' && (
+                      <>
+                        <p className="text-[11px] text-emerald-300/80 mt-3 max-w-xs mx-auto font-light leading-relaxed">
+                          Build confidence to approach women, start interactions, and handle nervousness naturally.
+                        </p>
+                        <RoleplayScenario
+                          activeScenario={activeScenario}
+                          onChangeScenario={setActiveScenario}
+                          disabled={callState !== 'idle' && callState !== 'error'}
+                        />
+                      </>
                     )}
 
                     {!isPremium && (
@@ -807,7 +817,7 @@ function App() {
                             </div>
                             <div>
                               <span className="text-xs font-medium text-pink-300 block">Premium Coaching Module Locked</span>
-                              <span className="text-[10px] text-white/60">Flirting & Confidence modules require a Premium pass</span>
+                              <span className="text-[10px] text-white/60">Flirting & Approach modules require a Premium pass</span>
                             </div>
                           </div>
                           <button
@@ -882,6 +892,15 @@ function App() {
               <div className={`mt-8 text-center text-[10px] uppercase tracking-widest ${callState === 'connected' ? 'text-pink-500' : 'text-white/40'}`}>
                 {callState === 'idle' || callState === 'error' ? 'INITIATE VOICE LINK' : callState === 'analyzing' ? 'DISMISS FEEDBACK' : 'TERMINATE LINK'}
               </div>
+
+              {callState === 'connected' && personality === 'Approach skills' && (
+                <div className="mt-4 px-4 py-2 rounded-xl bg-[#141416]/90 border border-pink-500/30 text-xs text-white/90 max-w-sm mx-auto flex items-center justify-center gap-2 shadow-lg backdrop-blur-sm animate-fade-in">
+                  <span className="w-2 h-2 rounded-full bg-pink-400 animate-pulse shrink-0" />
+                  <span className="font-light truncate">
+                    Roleplaying: <strong className="font-medium text-pink-300">{activeScenario.location}</strong>
+                  </span>
+                </div>
+              )}
             </motion.div>
           )}
 
@@ -1533,7 +1552,7 @@ function App() {
       </main>
 
       {/* Bottom Navigation */}
-      <nav className="bg-[#050505]/80 backdrop-blur-xl border-t border-white/5 absolute bottom-0 w-full z-20 pb-env">
+      <nav className="bg-[#050505]/80 backdrop-blur-xl border-t border-white/5 shrink-0 relative z-20 pb-env w-full mt-auto">
         <div className="flex justify-center items-center gap-2 max-w-md mx-auto p-4 w-full">
           <button 
             onClick={() => setActiveTab('feedback')}
@@ -1606,7 +1625,7 @@ function App() {
                   <div>
                     <h4 className="text-sm font-medium text-white mb-1 tracking-wide">Select a Module</h4>
                     <p className="text-xs text-white/60 leading-relaxed font-light">
-                      Choose from Practice Conversations, Dating Advice, Flirting Practice, or Confidence Building. Each module has a specific coaching focus.
+                      Choose from Practice Conversations, Dating Advice, Flirting Practice, or Approach Skills. Each module has a specific coaching focus.
                     </p>
                   </div>
                 </div>
@@ -1642,6 +1661,385 @@ function App() {
                   className="w-full py-3 rounded-full bg-white/5 hover:bg-white/10 text-white text-xs font-semibold uppercase tracking-widest transition-all"
                 >
                   Got It
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      
+      {/* About / Philosophy Modal */}
+      <AnimatePresence>
+        {showAboutModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-[#0e0e0e] border border-white/15 rounded-3xl max-w-lg w-full p-8 shadow-2xl relative max-h-[85vh] overflow-y-auto custom-scrollbar"
+            >
+              <button 
+                onClick={() => setShowAboutModal(false)}
+                className="absolute top-4 right-4 text-white/40 hover:text-white transition-colors"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+
+              <div className="mb-6">
+                <span className="text-sm font-medium tracking-[0.3em] uppercase">About <span className="text-pink-500">Veronica</span></span>
+              </div>
+
+              <div className="space-y-6">
+                <div className="flex gap-4">
+                  <div className="w-10 h-10 rounded-full bg-pink-500/10 border border-pink-500/30 flex items-center justify-center shrink-0">
+                    <span className="text-pink-400 font-mono text-sm">✦</span>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-medium text-white mb-1 tracking-wide">Who We Are</h4>
+                    <p className="text-xs text-white/60 leading-relaxed font-light">
+                      Veronica is an AI-powered Dating & Social Confidence Coach designed to help you communicate more naturally and confidently.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="w-10 h-10 rounded-full bg-pink-500/10 border border-pink-500/30 flex items-center justify-center shrink-0">
+                    <span className="text-pink-400 font-mono text-sm">◈</span>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-medium text-white mb-1 tracking-wide">What We Do</h4>
+                    <p className="text-xs text-white/60 leading-relaxed font-light">
+                      Practice conversations, respectful flirting, dating situations, and confidence-building through realistic voice interactions.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <div className="w-10 h-10 rounded-full bg-pink-500/10 border border-pink-500/30 flex items-center justify-center shrink-0">
+                    <span className="text-pink-400 font-mono text-sm">🎯</span>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-medium text-white mb-1 tracking-wide">Our Goal</h4>
+                    <p className="text-xs text-white/60 leading-relaxed font-light">
+                      We help you learn from every conversation, improve your communication, and develop the confidence to build genuine connections in the real world.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="mt-8 text-center text-xs font-medium tracking-wide text-pink-400/90 italic">
+                Practice with Veronica. Build confidence. Connect better.
+              </div>
+
+              <div className="mt-8 pt-6 border-t border-white/10 text-center">
+                <button
+                  onClick={() => setShowAboutModal(false)}
+                  className="w-full py-3 rounded-full bg-white/5 hover:bg-white/10 text-white text-xs font-semibold uppercase tracking-widest transition-all"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      
+      {/* Contact Modal */}
+      <AnimatePresence>
+        {showContactModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-[#0e0e0e] border border-white/15 rounded-3xl max-w-sm w-full p-8 shadow-2xl relative text-center"
+            >
+              <button 
+                onClick={() => { setShowContactModal(false); setContactCopied(false); }}
+                className="absolute top-4 right-4 text-white/40 hover:text-white transition-colors"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+
+              <div className="w-12 h-12 rounded-full bg-pink-500/10 border border-pink-500/30 flex items-center justify-center mx-auto mb-6 text-pink-400">
+                <Mail className="w-6 h-6" />
+              </div>
+
+              <h3 className="text-lg font-light text-white mb-2 tracking-wide">Get in Touch</h3>
+              <p className="text-xs text-white/50 font-light mb-6">
+                Have feedback, questions, or just want to say hi? Send us an email anytime.
+              </p>
+
+              <div className="flex items-center justify-between bg-black/50 border border-white/10 rounded-xl p-3 mb-8">
+                <span className="text-sm font-mono text-white/90 truncate ml-2">
+                  veronica.ai.coach@gmail.com
+                </span>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText("veronica.ai.coach@gmail.com");
+                    setContactCopied(true);
+                    setTimeout(() => setContactCopied(false), 2000);
+                  }}
+                  className="ml-3 p-2 rounded-lg bg-pink-500/20 text-pink-400 hover:bg-pink-500/30 transition-colors shrink-0 flex items-center justify-center"
+                  title="Copy Email"
+                >
+                  {contactCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </div>
+
+              <div className="pt-2 border-t border-white/10">
+                <button
+                  onClick={() => { setShowContactModal(false); setContactCopied(false); }}
+                  className="w-full py-3 rounded-full bg-white/5 hover:bg-white/10 text-white text-xs font-semibold uppercase tracking-widest transition-all"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      
+      {/* Help / FAQ Modal */}
+      <AnimatePresence>
+        {showHelpModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-[#0e0e0e] border border-white/15 rounded-3xl max-w-lg w-full p-8 shadow-2xl relative max-h-[85vh] overflow-y-auto custom-scrollbar"
+            >
+              <button 
+                onClick={() => setShowHelpModal(false)}
+                className="absolute top-4 right-4 text-white/40 hover:text-white transition-colors"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+
+              <div className="mb-6">
+                <span className="text-sm font-medium tracking-[0.3em] uppercase">Help & <span className="text-pink-500">FAQ</span></span>
+                <p className="text-xs text-white/50 font-light mt-2">
+                  Frequently Asked Questions
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                {[
+                  {
+                    q: "Why can't Veronica hear me?",
+                    a: "Ensure you have granted microphone permissions in your browser. If you denied them previously, click the lock icon in your URL bar to reset permissions, then refresh the page."
+                  },
+                  {
+                    q: "How is my feedback score calculated?",
+                    a: "Your score is a composite of 5 key metrics: Flow (pauses/stuttering), Listening Ratio (did you dominate the conversation?), Confidence (vocal tone and strength), Engagement (asking questions back), and Calibration (social appropriateness)."
+                  },
+                  {
+                    q: "Can I practice in other languages?",
+                    a: "Currently, Veronica is optimized for English, but the underlying Gemini Multimodal API can understand many languages. For the most accurate coaching and scoring, English is recommended."
+                  },
+                  {
+                    q: "Is my voice data saved?",
+                    a: "No. Your voice is streamed directly to generate real-time feedback and is not recorded, saved, or used to train models after your session ends."
+                  }
+                ].map((faq, index) => (
+                  <div key={index} className="border border-white/10 rounded-xl overflow-hidden bg-white/5">
+                    <button
+                      onClick={() => setExpandedFaq(expandedFaq === index ? null : index)}
+                      className="w-full px-4 py-4 flex items-center justify-between text-left hover:bg-white/5 transition-colors"
+                    >
+                      <span className="text-sm font-medium text-white/90">{faq.q}</span>
+                      <ChevronDown className={`w-4 h-4 text-white/50 transition-transform duration-300 ${expandedFaq === index ? 'rotate-180' : ''}`} />
+                    </button>
+                    <AnimatePresence>
+                      {expandedFaq === index && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="overflow-hidden"
+                        >
+                          <div className="p-4 pt-0 text-xs text-white/60 font-light leading-relaxed border-t border-white/10 mt-2">
+                            {faq.a}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-8 pt-6 border-t border-white/10 text-center">
+                <button
+                  onClick={() => setShowHelpModal(false)}
+                  className="w-full py-3 rounded-full bg-white/5 hover:bg-white/10 text-white text-xs font-semibold uppercase tracking-widest transition-all"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {showSettingsModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-[#0e0e0e] border border-white/15 rounded-3xl max-w-sm w-full p-8 shadow-2xl relative"
+            >
+              <button 
+                onClick={() => setShowSettingsModal(false)}
+                className="absolute top-4 right-4 text-white/40 hover:text-white transition-colors"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+
+              <div className="mb-6">
+                <span className="text-sm font-medium tracking-[0.3em] uppercase">Account <span className="text-pink-500">Settings</span></span>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <h4 className="text-xs font-semibold tracking-wider text-white/50 uppercase mb-3">Profile</h4>
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-pink-500/20 flex items-center justify-center text-pink-500 font-medium">
+                        {user?.email?.charAt(0).toUpperCase() || 'U'}
+                      </div>
+                      <div className="overflow-hidden">
+                        <p className="text-sm font-medium text-white truncate">{user?.email}</p>
+                        <p className="text-xs text-white/40 mt-0.5">Free Tier</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-xs font-semibold tracking-wider text-white/50 uppercase mb-3">Danger Zone</h4>
+                  <button
+                    onClick={() => {
+                      setShowSettingsModal(false);
+                      setShowDeleteConfirm(true);
+                    }}
+                    className="w-full flex items-center justify-between bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-colors rounded-xl p-4 group"
+                  >
+                    <div className="text-left">
+                      <p className="text-sm font-medium text-red-400 group-hover:text-red-300">Delete Account</p>
+                      <p className="text-xs text-red-500/60 mt-0.5">Permanently remove your data</p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-8 pt-6 border-t border-white/10 text-center">
+                <button
+                  onClick={async () => {
+                    try {
+                      await signOut(auth);
+                    } catch (error) {
+                      console.error("Error signing out:", error);
+                    }
+                  }}
+                  className="w-full py-3 rounded-full bg-white/5 hover:bg-white/10 text-white text-xs font-semibold uppercase tracking-widest transition-all mb-3"
+                >
+                  Log Out
+                </button>
+                <button
+                  onClick={() => setShowSettingsModal(false)}
+                  className="w-full py-3 rounded-full bg-transparent hover:bg-white/5 text-white/60 hover:text-white text-xs font-semibold uppercase tracking-widest transition-all"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {showSettingsModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-[#0e0e0e] border border-white/15 rounded-3xl max-w-sm w-full p-8 shadow-2xl relative"
+            >
+              <button 
+                onClick={() => setShowSettingsModal(false)}
+                className="absolute top-4 right-4 text-white/40 hover:text-white transition-colors"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+
+              <div className="mb-6">
+                <span className="text-sm font-medium tracking-[0.3em] uppercase">Account <span className="text-pink-500">Settings</span></span>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <h4 className="text-xs font-semibold tracking-wider text-white/50 uppercase mb-3">Profile</h4>
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-pink-500/20 flex items-center justify-center text-pink-500 font-medium shrink-0">
+                        {user?.email?.charAt(0).toUpperCase() || 'U'}
+                      </div>
+                      <div className="overflow-hidden">
+                        <p className="text-sm font-medium text-white truncate">{user?.email}</p>
+                        <p className="text-xs text-white/40 mt-0.5">{isPremium ? 'Premium Tier' : 'Free Tier'}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-xs font-semibold tracking-wider text-white/50 uppercase mb-3">Danger Zone</h4>
+                  <button
+                    onClick={() => {
+                      setShowSettingsModal(false);
+                      setShowDeleteConfirm(true);
+                    }}
+                    className="w-full flex items-center justify-between bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-colors rounded-xl p-4 group"
+                  >
+                    <div className="text-left">
+                      <p className="text-sm font-medium text-red-400 group-hover:text-red-300">Delete Account</p>
+                      <p className="text-xs text-red-500/60 mt-0.5">Permanently remove your data</p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-8 pt-6 border-t border-white/10 text-center">
+                <button
+                  onClick={async () => {
+                    try {
+                      sessionStorage.removeItem('tempPremium');
+                      await signOut(auth);
+                    } catch (error) {
+                      console.error("Error signing out:", error);
+                    }
+                  }}
+                  className="w-full py-3 rounded-full bg-white/5 hover:bg-white/10 text-white text-xs font-semibold uppercase tracking-widest transition-all mb-3 flex items-center justify-center gap-2"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Sign Out
+                </button>
+                <button
+                  onClick={() => setShowSettingsModal(false)}
+                  className="w-full py-3 rounded-full bg-transparent hover:bg-white/5 text-white/60 hover:text-white text-xs font-semibold uppercase tracking-widest transition-all"
+                >
+                  Close
                 </button>
               </div>
             </motion.div>
